@@ -380,6 +380,8 @@ def claude() -> anthropic.Anthropic:
 
 
 NOT_CONNECTED = (
+    "The AI coach is not available right now. Try again later."
+    if HOSTED else
     "The AI coach is not connected yet. Add ANTHROPIC_API_KEY to the .env file "
     "in the app folder, then restart the app."
 )
@@ -463,6 +465,15 @@ MEAL_SYSTEM = """You are the nutrition side of FitCoach, an app where people log
 
 How to estimate:
 Identify each distinct food and drink. Estimate each portion from visual cues such as plate and bowl size, cutlery, hands, and packaging, then estimate calories and macros from typical values for that food as it is usually prepared. Cooking oil, butter, ghee, sauces, dressings, and sugary drinks are easy to miss and add up, so account for them when the dish would normally include them. Meals can come from any cuisine; name dishes the way the person would. When the person's note states amounts, ingredients, or brands, trust the note over your visual guess. A photo hides a lot, so choose the most likely middle estimate rather than an extreme one.
+
+Packaged food:
+When the photo shows a packet, wrapper, box, bottle, or can, read what is printed on it before estimating anything. Nutrition figures on the pack (per piece, per serving, per 100 g or 100 ml, and the net weight) are more accurate than typical values, so calculate from them and say in portion which printed figure you used, for example "1 cake, 114 kcal each per the pack". If no figures are readable, use what you know about that exact product rather than a generic food of the same kind.
+
+How much was eaten:
+A photo of a pack does not show how much of it the person ate. When the note does not say, log one serving as the pack defines it (one piece, one bar, one can), not the whole pack, and use tip to state exactly what amount you logged. Every logged meal has a Fix button where the person can type a correction, so when the amount is a guess, tell them to tap Fix and say how much they had.
+
+Corrections:
+Sometimes you also receive your earlier estimate for this meal together with a correction from the person. They were there and you were not, so apply what they say exactly: amounts they state replace yours, foods they say were absent are removed, and foods they add are included. Keep the rest of the earlier estimate as it was, recalculate the numbers, and do not question the correction in tip.
 
 Set confidence honestly: high for packaged food with a readable label or simple, clearly portioned foods; medium for a typical plated meal; low for mixed dishes, hidden ingredients, or portions you cannot judge.
 
@@ -552,34 +563,91 @@ def add_meal():
         raise ApiError("Add a photo of the meal or describe what you ate.")
     spend_ai_call(user["id"])
 
-    eaten = day_totals(user["id"], day)
-    content = []
-    if upload is not None:
-        content.append(image_block(upload[0], upload[1]))
-    content.append({"type": "text", "text": (
-        f"About the person: {profile_text(user)}\n"
-        f"Already logged on this day before this meal: {eaten['calories']} kcal, {eaten['protein_g']:g} g protein.\n"
-        f"Their note about this meal: {note or '(none)'}"
-    )})
-    result = ask_claude(MEAL_SYSTEM, content, MEAL_SCHEMA, effort="low")
-    if not result["is_food"] or not result["items"]:
-        raise ApiError(result["tip"] or "No food found in that photo. Try another photo or describe the meal.", 422)
-
-    items = result["items"]
+    photo = (upload[0], upload[1]) if upload is not None else None
+    result = estimate_meal(user, day, note, photo)
     photo_name = store_photo(upload[0], upload[2]) if upload is not None else None
     cur = db().execute(
         "INSERT INTO meals (user_id, day, created_at, photo, note, name, items, calories, protein_g,"
         " carbs_g, fat_g, confidence, tip) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        (user["id"], day, now_iso(), photo_name, note, result["name"][:80], json.dumps(items),
-         max(0, int(round(sum(i["calories"] for i in items)))),
-         round(max(0, sum(i["protein_g"] for i in items)), 1),
-         round(max(0, sum(i["carbs_g"] for i in items)), 1),
-         round(max(0, sum(i["fat_g"] for i in items)), 1),
-         result["confidence"], result["tip"]),
+        (user["id"], day, now_iso(), photo_name, note, *meal_values(result)),
     )
     db().commit()
     row = db().execute("SELECT * FROM meals WHERE id=?", (cur.lastrowid,)).fetchone()
     return jsonify(meal=meal_json(row), totals=day_totals(user["id"], day))
+
+
+def estimate_meal(user, day: str, note: str, photo=None, earlier=None, correction: str = "") -> dict:
+    """Ask Claude for a meal estimate. `photo` is (bytes, media_type). `earlier` is the
+    meal row being corrected, sent back with the person's correction."""
+    eaten = day_totals(user["id"], day)
+    if earlier is not None:  # the meal being corrected is not "already logged"
+        eaten["calories"] -= earlier["calories"]
+        eaten["protein_g"] = round(eaten["protein_g"] - earlier["protein_g"], 1)
+    text = (
+        f"About the person: {profile_text(user)}\n"
+        f"Already logged on this day apart from this meal: {eaten['calories']} kcal, {eaten['protein_g']:g} g protein.\n"
+        f"Their note about this meal: {note or '(none)'}"
+    )
+    if earlier is not None:
+        lines = "\n".join(
+            f"- {i['name']} ({i['portion']}): {i['calories']} kcal, {i['protein_g']:g} g protein, "
+            f"{i['carbs_g']:g} g carbs, {i['fat_g']:g} g fat"
+            for i in json.loads(earlier["items"])
+        )
+        text += (
+            f"\n\nYour earlier estimate for this meal, \"{earlier['name']}\":\n{lines}\n"
+            f"The person says this needs correcting. Their correction: {correction}"
+        )
+    content = [image_block(*photo)] if photo is not None else []
+    content.append({"type": "text", "text": text})
+    result = ask_claude(MEAL_SYSTEM, content, MEAL_SCHEMA, effort="medium")
+    if not result["is_food"] or not result["items"]:
+        raise ApiError(result["tip"] or "No food found in that photo. Try another photo or describe the meal.", 422)
+    return result
+
+
+def meal_values(result: dict) -> tuple:
+    """name, items, calories, protein, carbs, fat, confidence, tip. Totals are summed here, not by the model."""
+    items = result["items"]
+    return (
+        result["name"][:80], json.dumps(items),
+        max(0, int(round(sum(i["calories"] for i in items)))),
+        round(max(0, sum(i["protein_g"] for i in items)), 1),
+        round(max(0, sum(i["carbs_g"] for i in items)), 1),
+        round(max(0, sum(i["fat_g"] for i in items)), 1),
+        result["confidence"], result["tip"],
+    )
+
+
+@app.post("/api/meals/<int:meal_id>/fix")
+@login_required
+def fix_meal(meal_id):
+    """Re-estimate a logged meal using the person's correction ("I only ate 2 of them")."""
+    user = g.user
+    row = db().execute("SELECT * FROM meals WHERE id=? AND user_id=?", (meal_id, user["id"])).fetchone()
+    if row is None:
+        raise ApiError("Meal not found.", 404)
+    body = request.get_json(silent=True) or {}
+    correction = str(body.get("correction", "")).strip()[:300]
+    if not correction:
+        raise ApiError("Say what should change, like how much you ate.")
+    spend_ai_call(user["id"])
+
+    photo = None
+    if row["photo"] and (UPLOADS / row["photo"]).exists():
+        data = (UPLOADS / row["photo"]).read_bytes()
+        kind = sniff(data)
+        if kind:
+            photo = (data, kind[0])
+    result = estimate_meal(user, row["day"], row["note"], photo, earlier=row, correction=correction)
+    db().execute(
+        "UPDATE meals SET name=?, items=?, calories=?, protein_g=?, carbs_g=?, fat_g=?, confidence=?, tip=?"
+        " WHERE id=?",
+        (*meal_values(result), meal_id),
+    )
+    db().commit()
+    row = db().execute("SELECT * FROM meals WHERE id=?", (meal_id,)).fetchone()
+    return jsonify(meal=meal_json(row), totals=day_totals(user["id"], row["day"]))
 
 
 @app.delete("/api/meals/<int:meal_id>")

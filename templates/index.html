@@ -530,7 +530,14 @@ function mealCard(m) {
       <ul class="items">${m.items.map(i => `<li class="body-6"><span>${esc(i.name)} <span class="muted">${esc(i.portion)}</span></span><span class="muted" style="white-space:nowrap">${num(i.calories)} kcal</span></li>`).join('')}</ul></details>
     ${m.tip ? `<p class="tip body-6">${esc(m.tip)}</p>` : ''}
     <div class="row between"><span class="caption-5 muted">Estimated from your ${m.photo ? 'photo' : 'description'}</span>
-      <button class="btn text danger button-sm" data-remove>Remove</button></div>
+      <div class="row"><button class="btn text button-sm" data-fix aria-expanded="false">Fix</button>
+        <button class="btn text danger button-sm" data-remove>Remove</button></div></div>
+    <form class="stack" data-fix-form hidden novalidate>
+      <label class="field"><span class="caption-2 muted">What should change? The estimate is redone with your correction.</span>
+        <input name="correction" maxlength="300" placeholder="I only ate 2 of them"></label>
+      <p class="error body-6" role="alert" hidden></p>
+      <button class="btn quiet wide button-sm" type="submit"><span>Update estimate</span></button>
+    </form>
   </article>`;
 }
 
@@ -557,6 +564,14 @@ function armRemove(btn, run) {
 }
 
 $('#meals').addEventListener('click', e => {
+  const fix = e.target.closest('[data-fix]');
+  if (fix) {
+    const form = $('[data-fix-form]', fix.closest('[data-meal]'));
+    form.hidden = !form.hidden;
+    fix.setAttribute('aria-expanded', String(!form.hidden));
+    if (!form.hidden) form.correction.focus();
+    return;
+  }
   const btn = e.target.closest('[data-remove]');
   if (!btn) return;
   const card = btn.closest('[data-meal]');
@@ -565,6 +580,23 @@ $('#meals').addEventListener('click', e => {
     try { await api(`/api/meals/${card.dataset.meal}`, { method: 'DELETE' }); loadDay(); }
     catch (err) { btn.disabled = false; btn.textContent = err.message; }
   });
+});
+
+$('#meals').addEventListener('submit', async e => {
+  const form = e.target.closest('[data-fix-form]');
+  if (!form) return;
+  e.preventDefault();
+  const correction = form.correction.value.trim();
+  if (!correction) return setError(form, 'Say what should change, like how much you ate.');
+  setError(form, '');
+  busy(form, true, 'Updating the estimate');
+  try {
+    await postJson(`/api/meals/${form.closest('[data-meal]').dataset.meal}/fix`, { correction });
+    await loadDay();
+  } catch (err) {
+    setError(form, err.message);
+    busy(form, false);
+  }
 });
 
 $('#meal-form').addEventListener('submit', async e => {
