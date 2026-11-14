@@ -57,8 +57,11 @@ app.config.update(
     PERMANENT_SESSION_LIFETIME=timedelta(days=30),
 )
 if HOSTED:
-    # Behind Render's proxy: trust its headers for the client address and https.
-    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
+    # Requests reach the app through Cloudflare and then Render's proxy, so the
+    # visitor is the second address from the right in X-Forwarded-For. With
+    # x_for=1 every request appears to come from a rotating Cloudflare address,
+    # which breaks the per-visitor sign-in rate limits.
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=2, x_proto=1)
 
 
 # ---------------------------------------------------------------- errors
