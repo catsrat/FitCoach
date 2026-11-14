@@ -4,6 +4,7 @@ Photo based fitness coaching and meal tracking.
 
 - **Check in**: send a progress photo (plus optional weight and a note). The coach compares it with your previous check in and replies with observations, training and nutrition advice, and three actions for the week.
 - **Meals**: snap a meal (or describe it). Calories, protein, carbs, and fat are estimated per item and added to your day against your targets.
+- **Coach**: chat with a coach that knows your plan, your meals, and your check ins. It advises only; it cannot change the account.
 - **Plan**: daily calorie and protein targets from your age, height, weight, goal, and activity (Mifflin St Jeor).
 
 ## Run
@@ -34,5 +35,6 @@ Pushes to `main` redeploy automatically. Cost controls: `FITCOACH_DAILY_AI_LIMIT
 
 - Data lives in `fitcoach.db` (SQLite) and `uploads/` next to the app.
 - The AI model is `claude-opus-5-5`; change it with `FITCOACH_MODEL` in `.env`.
-- Each account gets 40 photo analyses a day (`FITCOACH_DAILY_AI_LIMIT`).
+- Each account gets 40 photo analyses a day (`FITCOACH_DAILY_AI_LIMIT`). Fixing a meal counts as one.
+- Coach chat runs on `claude-sonnet-5-5` (`FITCOACH_CHAT_MODEL`) with 30 messages per account a day (`FITCOACH_DAILY_CHAT_LIMIT`) and 600 across all accounts (`FITCOACH_GLOBAL_CHAT_LIMIT`).
 - Calorie numbers and coaching are estimates, not medical advice.

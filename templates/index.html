@@ -139,6 +139,26 @@ nav.tabs button i { font-size: 20px; }
 nav.tabs button:hover { color: var(--text); }
 nav.tabs button:active { transform: scale(0.98); }
 nav.tabs button[aria-current="page"] { background: var(--line); color: var(--text); }
+@media (max-width: 479px) {
+  /* four tabs do not fit side by side with inline labels on a phone, so stack icon over label */
+  nav.tabs { border-radius: 24px; }
+  nav.tabs button { flex-direction: column; gap: 2px; padding: 8px 12px; min-width: 64px; border-radius: 20px; font-size: 12px; line-height: 16px; }
+}
+
+/* coach chat */
+[data-view="coach"] { min-height: calc(100dvh - 120px); }
+.chat { flex: 1; display: flex; flex-direction: column; gap: 12px; }
+.msg { max-width: 88%; padding: 8px 12px; border-radius: 16px; white-space: pre-wrap; overflow-wrap: anywhere; animation: rise 500ms var(--ease) both; }
+.msg.user { align-self: flex-end; background: var(--s3); }
+.msg.assistant { align-self: flex-start; background: var(--s1); border: 1px solid var(--line); }
+.chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+.composer { position: sticky; bottom: 64px; display: flex; flex-direction: column; gap: 8px; padding: 8px 0; background: var(--bg); }
+/* keeps older messages from showing through between the composer and the tab bar */
+.composer::after { content: ""; position: absolute; left: 0; right: 0; top: 100%; height: 96px; background: var(--bg); }
+.composer input { border-radius: 9999px; padding: 8px 16px; }
+.composer .icon-btn { flex: none; background: var(--accent); color: var(--accent-ink); border: 0; }
+.composer .icon-btn:hover { background: var(--accent); opacity: 0.88; }
+@media (max-width: 479px) { .composer { bottom: 80px; } }
 </style>
 </head>
 <body>
@@ -204,7 +224,7 @@ nav.tabs button[aria-current="page"] { background: var(--line); color: var(--tex
     </form>
     <div class="card">
       <h2 class="title-3">Your photos and data</h2>
-      <p class="body-6 muted">Your photos, meals, and check ins are stored on the server that runs this app and only you can open them. Each photo is sent to Anthropic's Claude API to produce the estimate or feedback. Removing a meal or check in deletes its photo, and deleting your account erases everything.</p>
+      <p class="body-6 muted">Your photos, meals, and check ins are stored on the server that runs this app and only you can open them. Each photo is sent to Anthropic's Claude API to produce the estimate or feedback. Messages to your coach are stored too, and are sent to the same API with a summary of your plan, meals, and check ins. Removing a meal or check in deletes its photo, and deleting your account erases everything.</p>
       <p class="error body-6" role="alert" id="account-error" hidden></p>
       <div class="row between">
         <button class="btn quiet button-sm" type="button" id="logout"><i class="ph ph-sign-out" aria-hidden="true"></i>Log out</button>
@@ -291,11 +311,31 @@ nav.tabs button[aria-current="page"] { background: var(--line); color: var(--tex
 
     <div class="stack" id="checkins" aria-live="polite"></div>
   </section>
+
+  <!-- Coach -->
+  <section class="view" data-view="coach" hidden>
+    <header class="row between">
+      <div>
+        <h1 class="heading-5">Coach</h1>
+        <p class="caption-2 muted" id="chat-left"></p>
+      </div>
+      <button class="btn text button-sm" type="button" id="chat-clear" hidden>Clear chat</button>
+    </header>
+    <div class="chat" id="chat" aria-live="polite"></div>
+    <form class="composer" id="chat-form" novalidate>
+      <p class="error body-6" role="alert" hidden></p>
+      <div class="row">
+        <input name="message" maxlength="1000" placeholder="Ask your coach" aria-label="Message for your coach" autocomplete="off" enterkeyhint="send">
+        <button class="icon-btn" type="submit" aria-label="Send message"><i class="ph ph-paper-plane-tilt" aria-hidden="true"></i></button>
+      </div>
+    </form>
+  </section>
 </main>
 
 <nav class="tabs" aria-label="Main" hidden>
   <button class="button-sm" data-tab="today"><i class="ph ph-fork-knife" aria-hidden="true"></i>Today</button>
   <button class="button-sm" data-tab="checkin"><i class="ph ph-camera" aria-hidden="true"></i>Check in</button>
+  <button class="button-sm" data-tab="coach"><i class="ph ph-chat-circle-dots" aria-hidden="true"></i>Coach</button>
   <button class="button-sm" data-tab="plan"><i class="ph ph-user" aria-hidden="true"></i>Plan</button>
 </nav>
 
@@ -351,6 +391,7 @@ function show(view) {
   if (view === 'today') loadDay();
   if (view === 'checkin') loadCheckins();
   if (view === 'plan') fillPlan();
+  if (view === 'coach') loadChat();
 }
 $$('nav.tabs button').forEach(b => b.addEventListener('click', () => show(b.dataset.tab)));
 
@@ -621,6 +662,88 @@ $('#meal-form').addEventListener('submit', async e => {
     setError(form, err.message);
     if (!$('#meals').children.length) loadDay();
   } finally { busy(form, false); }
+});
+
+/* ---------- coach chat ---------- */
+const bubble = m => `<p class="msg ${m.role === 'user' ? 'user' : 'assistant'} body-3">${esc(m.content)}</p>`;
+const chatEmpty = () => `<div class="card empty"><i class="ph ph-chat-circle-dots" aria-hidden="true"></i>
+  <h3 class="title-3">Ask your coach</h3>
+  <p class="body-6 muted">Your coach can see your plan, your meals, and your check ins, so the answers are about you.</p>
+  <div class="chips">${['What should I eat next today?', 'How is my week going?', 'How do I reach my protein target?']
+    .map(q => `<button class="btn quiet button-sm" type="button" data-ask>${q}</button>`).join('')}</div></div>`;
+const chatLeft = n => { $('#chat-left').textContent = n === 1 ? '1 message left today' : `${n} messages left today`; };
+const chatBottom = () => window.scrollTo(0, document.documentElement.scrollHeight);
+
+async function loadChat() {
+  const box = $('#chat');
+  box.innerHTML = `<div class="skeleton" style="height:40px;width:64%;align-self:flex-end;border-radius:16px"></div>
+    <div class="skeleton" style="height:96px;width:80%;border-radius:16px"></div>`;
+  try {
+    const data = await api('/api/chat');
+    box.innerHTML = data.messages.length ? data.messages.map(bubble).join('') : chatEmpty();
+    $('#chat-clear').hidden = !data.messages.length;
+    chatLeft(data.left);
+    chatBottom();
+  } catch (err) {
+    if (err.status === 401) { me = null; return route(); }
+    box.innerHTML = `<p class="error body-6" role="alert">${esc(err.message)}</p>`;
+  }
+}
+
+async function sendChat(text) {
+  const form = $('#chat-form'), box = $('#chat'), btn = $('button', form);
+  if (btn.disabled) return;
+  setError(form, '');
+  $('.empty', box)?.remove();
+  $('.error', box)?.remove();
+  box.insertAdjacentHTML('beforeend', bubble({ role: 'user', content: text })
+    + `<div class="skeleton" data-pending role="status" aria-label="Your coach is writing" style="height:40px;width:96px;border-radius:16px"></div>`);
+  const mine = box.children[box.children.length - 2];
+  btn.disabled = true;
+  form.message.value = '';
+  chatBottom();
+  try {
+    const data = await postJson('/api/chat', { message: text, day: ymd(new Date()) });
+    $('[data-pending]', box).outerHTML = bubble(data.messages[1]);
+    chatLeft(data.left);
+    $('#chat-clear').hidden = false;
+  } catch (err) {
+    if (err.status === 401) { me = null; return route(); }
+    $('[data-pending]', box)?.remove();
+    mine.remove();
+    if (!box.children.length) box.innerHTML = chatEmpty();
+    form.message.value = text;
+    setError(form, err.message);
+  } finally {
+    btn.disabled = false;
+    chatBottom();
+  }
+}
+
+$('#chat-form').addEventListener('submit', e => {
+  e.preventDefault();
+  const text = e.target.message.value.trim();
+  if (!text) return setError(e.target, 'Type a message for your coach.');
+  sendChat(text);
+});
+
+$('#chat').addEventListener('click', e => {
+  const chip = e.target.closest('[data-ask]');
+  if (chip) sendChat(chip.textContent);
+});
+
+$('#chat-clear').addEventListener('click', async e => {
+  const btn = e.currentTarget;
+  if (!btn.dataset.armed) {
+    btn.dataset.armed = '1';
+    btn.textContent = 'Tap again to clear';
+    setTimeout(() => { delete btn.dataset.armed; btn.textContent = 'Clear chat'; }, 3000);
+    return;
+  }
+  delete btn.dataset.armed;
+  btn.textContent = 'Clear chat';
+  try { await api('/api/chat', { method: 'DELETE' }); loadChat(); }
+  catch (err) { setError($('#chat-form'), err.message); }
 });
 
 /* ---------- check ins ---------- */
