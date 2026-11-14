@@ -1,0 +1,6 @@
+.venv/
+.env
+.secret_key
+fitcoach.db
+uploads/
+__pycache__/

@@ -1,0 +1,32 @@
+# Render Blueprint: Render dashboard -> New -> Blueprint -> pick this repo.
+# Creates one web service with a persistent disk for accounts and photos.
+# Render asks for ANTHROPIC_API_KEY when you apply it.
+services:
+  - type: web
+    name: fitcoach
+    runtime: python
+    region: frankfurt          # can't be changed later
+    plan: starter              # a persistent disk needs a paid plan
+    buildCommand: pip install -r requirements.txt
+    # One process, many threads: requests mostly wait on the AI call, and a single
+    # process keeps the sign-in rate limiter and SQLite simple.
+    startCommand: gunicorn app:app --workers 1 --threads 16 --timeout 180 --bind 0.0.0.0:$PORT
+    healthCheckPath: /healthz
+    autoDeployTrigger: commit
+    disk:
+      name: data
+      mountPath: /var/data     # SQLite database + uploaded photos
+      sizeGB: 1
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: DATA_DIR
+        value: /var/data
+      - key: SECRET_KEY        # signs login cookies
+        generateValue: true
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: FITCOACH_DAILY_AI_LIMIT      # photo analyses per account per day
+        value: "40"
+      - key: FITCOACH_GLOBAL_DAILY_LIMIT  # photo analyses across all accounts per day
+        value: "400"
