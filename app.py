@@ -130,6 +130,13 @@ CREATE INDEX IF NOT EXISTS chat_messages_user ON chat_messages(user_id, id);
 CREATE TABLE IF NOT EXISTS chat_calls (
     user_id INTEGER NOT NULL, day TEXT NOT NULL, created_at TEXT NOT NULL
 );
+-- One row per action the person has ticked off. The action text lives in the
+-- check in's feedback ("this_week"); position is its index in that list.
+CREATE TABLE IF NOT EXISTS action_done (
+    checkin_id INTEGER NOT NULL, position INTEGER NOT NULL,
+    user_id INTEGER NOT NULL, done_at TEXT NOT NULL,
+    PRIMARY KEY (checkin_id, position)
+);
 """
 
 
@@ -257,7 +264,7 @@ def delete_account():
     photos = [r[0] for r in db().execute(
         "SELECT photo FROM meals WHERE user_id=? AND photo IS NOT NULL"
         " UNION SELECT photo FROM checkins WHERE user_id=?", (uid, uid))]
-    for table in ("meals", "checkins", "ai_calls", "chat_messages", "chat_calls"):
+    for table in ("meals", "checkins", "ai_calls", "chat_messages", "chat_calls", "action_done"):
         db().execute(f"DELETE FROM {table} WHERE user_id=?", (uid,))
     db().execute("DELETE FROM users WHERE id=?", (uid,))
     db().commit()
@@ -708,8 +715,11 @@ You are a coach, not a clinician, so do not diagnose. If something suggests they
 
 If the photo does not show a person clearly enough to give physique feedback, set photo_usable to false, say what kind of photo would work in the headline, and still give useful guidance from their numbers.
 
+Following up:
+When there was an earlier check in, you also get the three actions set then, each marked with whether the person ticked it off in the app. A coach who never asks about last week's plan is not coaching, so follow up on them in follow_up: acknowledge what they ticked, and for anything unticked, say what would make it easier this week or fold it into the new actions. A tick is the person's own report, and an unticked action may be done but not recorded, so ask rather than scold. Let this shape this_week too: build on what worked, and make an action smaller or different if it was missed, rather than repeating it unchanged.
+
 Fields:
-headline is one sentence that sums up where they are right now. observations are 2 to 4 things you see in the photo. progress compares against the previous check in in a sentence or two; on a first check in, say this photo is the baseline. training and nutrition are 2 to 4 concrete recommendations each. this_week is exactly 3 actions small enough to complete in the next seven days. encouragement is one genuine closing sentence tied to something specific about them. Write in plain everyday language and address them directly."""
+headline is one sentence that sums up where they are right now. follow_up is one to three sentences on the actions from the previous check in as described above; leave it empty on a first check in. observations are 2 to 4 things you see in the photo. progress compares against the previous check in in a sentence or two; on a first check in, say this photo is the baseline. training and nutrition are 2 to 4 concrete recommendations each. this_week is exactly 3 actions small enough to complete in the next seven days. encouragement is one genuine closing sentence tied to something specific about them. Write in plain everyday language and address them directly."""
 
 _STRINGS = {"type": "array", "items": {"type": "string"}}
 COACH_SCHEMA = {
@@ -717,6 +727,7 @@ COACH_SCHEMA = {
     "properties": {
         "photo_usable": {"type": "boolean"},
         "headline": {"type": "string"},
+        "follow_up": {"type": "string"},
         "observations": _STRINGS,
         "progress": {"type": "string"},
         "training": _STRINGS,
@@ -724,7 +735,7 @@ COACH_SCHEMA = {
         "this_week": _STRINGS,
         "encouragement": {"type": "string"},
     },
-    "required": ["photo_usable", "headline", "observations", "progress", "training",
+    "required": ["photo_usable", "headline", "follow_up", "observations", "progress", "training",
                  "nutrition", "this_week", "encouragement"],
     "additionalProperties": False,
 }
@@ -746,11 +757,60 @@ def recent_intake_text(user_id: int) -> str:
             "Days may be only partly logged.")
 
 
+def actions_for(checkin) -> list:
+    """The actions a check in set, each with whether the person has ticked it off."""
+    done = {r[0] for r in db().execute(
+        "SELECT position FROM action_done WHERE checkin_id=?", (checkin["id"],))}
+    texts = json.loads(checkin["feedback"]).get("this_week", [])
+    return [{"position": i, "text": text, "done": i in done} for i, text in enumerate(texts)]
+
+
+def actions_text(checkin) -> str:
+    return "\n".join(
+        f"- [{'ticked as done' if a['done'] else 'not ticked'}] {a['text']}" for a in actions_for(checkin))
+
+
+def latest_checkin(user_id: int):
+    return db().execute(
+        "SELECT * FROM checkins WHERE user_id=? ORDER BY created_at DESC, id DESC LIMIT 1", (user_id,)
+    ).fetchone()
+
+
+@app.get("/api/actions")
+@login_required
+def get_actions():
+    """This week's actions: the ones set at the most recent check in."""
+    row = latest_checkin(g.user["id"])
+    if row is None:
+        return jsonify(checkin_id=None, set_at=None, actions=[])
+    return jsonify(checkin_id=row["id"], set_at=row["created_at"], actions=actions_for(row))
+
+
+@app.put("/api/actions/<int:checkin_id>/<int:position>")
+@login_required
+def tick_action(checkin_id, position):
+    row = db().execute(
+        "SELECT * FROM checkins WHERE id=? AND user_id=?", (checkin_id, g.user["id"])).fetchone()
+    if row is None or position >= len(json.loads(row["feedback"]).get("this_week", [])):
+        raise ApiError("Action not found.", 404)
+    body = request.get_json(silent=True) or {}
+    if body.get("done") is True:
+        db().execute("INSERT OR IGNORE INTO action_done VALUES (?,?,?,?)",
+                     (checkin_id, position, g.user["id"], now_iso()))
+    elif body.get("done") is False:
+        db().execute("DELETE FROM action_done WHERE checkin_id=? AND position=?", (checkin_id, position))
+    else:
+        raise ApiError("Say whether the action is done.")
+    db().commit()
+    return jsonify(checkin_id=checkin_id, set_at=row["created_at"], actions=actions_for(row))
+
+
 def checkin_json(row) -> dict:
     return {
         "id": row["id"], "created_at": row["created_at"],
         "photo": f"/photo/{row['photo']}", "weight_kg": row["weight_kg"],
         "note": row["note"], "feedback": json.loads(row["feedback"]),
+        "actions": actions_for(row),
     }
 
 
@@ -798,6 +858,10 @@ def add_checkin():
             w = f"{row['weight_kg']:g} kg" if row["weight_kg"] else "weight not given"
             lines.append(f"- {row['created_at'][:10]} ({w}): {fb['headline']} Actions set: {'; '.join(fb['this_week'])}")
         history = "Earlier check ins, newest first:\n" + "\n".join(lines)
+        ticks = actions_text(last)
+        if ticks:
+            history += (f"\nActions set at the most recent check in ({last['created_at'][:10]}), "
+                        f"with what the person ticked off in the app:\n{ticks}")
 
     content.append({"type": "text", "text": "New check in photo, taken today:"})
     content.append(image_block(upload[0], upload[1]))
@@ -834,6 +898,7 @@ def delete_checkin(checkin_id):
     if row is None:
         raise ApiError("Check in not found.", 404)
     db().execute("DELETE FROM checkins WHERE id=?", (checkin_id,))
+    db().execute("DELETE FROM action_done WHERE checkin_id=?", (checkin_id,))
     db().commit()
     remove_photo(row["photo"])
     return jsonify(ok=True)
@@ -846,13 +911,15 @@ CHAT_SYSTEM = """You are the coach in FitCoach, an app where adults track a fitn
 What a good answer looks like:
 Answer the question they asked, using their numbers. "You have about 620 kcal and 45 g protein left today, so a chicken wrap with a side of yogurt fits" is useful; general nutrition advice they could find anywhere is not. When they ask what to eat, suggest two or three concrete options with rough calories and protein, suited to what is left of their day and to foods they have already been logging. When they ask why progress has stalled, look at what the snapshot shows (how many days were logged, average intake against the target, weight across check ins) and say what it suggests and what to try this week. If the snapshot does not hold what you would need, say so and ask one short question rather than guessing.
 
+The snapshot lists this week's actions, the three set at their latest check in, and which ones they have ticked off. Bring them in when they are relevant to what the person is asking: credit what is done and help make the open ones doable. An unticked action may simply not be recorded, so ask rather than assume, and do not nag about them in every reply.
+
 Be honest about the data. Calories in the app are estimates from photos and can be off, and a day with little logged usually means meals were not logged, not that the person ate little. Do not treat a partly logged day as a real total.
 
 How to write:
 This is a chat on a phone. Write the way a good coach texts: warm, direct, and short, usually under 120 words, longer only when they ask for a plan. Use plain text. The app shows your reply exactly as written, so do not use markdown such as asterisks, pound signs, or tables. For a short list, put each item on its own line starting with a dash.
 
 What you can and cannot do:
-You can only talk. You cannot log meals, change targets, or edit the account. When that is what they need, tell them where: meals are logged and corrected on the Today tab (each meal has a Fix button), progress photos go on the Check in tab, and profile, goal, and targets are on the Plan tab. You cannot see their photos here, only the notes from earlier feedback.
+You can only talk. You cannot log meals, change targets, or edit the account. When that is what they need, tell them where: meals are logged and corrected on the Today tab (each meal has a Fix button), this week's actions are ticked off on the Today tab, progress photos go on the Check in tab, and profile, goal, and targets are on the Plan tab. You cannot see their photos here, only the notes from earlier feedback.
 
 Limits:
 You are a fitness and nutrition coach, not a clinician. For symptoms, injuries that are not improving, medical conditions, medication, pregnancy, or anything that sounds like disordered eating, say plainly that it is outside what you can judge and that a doctor or registered dietitian should look at it, then help with what you safely can. Do not recommend eating below the daily target the app has set, extended fasting, purging, or dosing of steroids or other drugs, even when asked; explain briefly and offer the safer route to the same goal. Never moralise about food or bodies. If they ask about something unrelated to their training, eating, recovery, or this app, say in a sentence that you are here for their fitness and bring it back."""
@@ -888,6 +955,9 @@ def account_snapshot(user, day: str) -> str:
         "Meals logged today:\n" + meal_lines if meals else "No meals logged today yet.",
         f"Last 7 days: {recent_intake_text(uid)}",
         ("Check ins, newest first:\n" + "\n".join(checkin_lines)) if checkin_lines else "No check ins yet.",
+        (f"This week's actions, set at the {checkins[0]['created_at'][:10]} check in, with what they have "
+         f"ticked off on the Today tab:\n{actions_text(checkins[0])}") if checkins and actions_text(checkins[0])
+        else "No actions set yet; a check in sets three for the week.",
     ])
 
 

@@ -119,6 +119,14 @@ details summary i { transition: transform 300ms var(--ease); }
 .items { list-style: none; padding: 8px 0 0; display: flex; flex-direction: column; gap: 8px; }
 .items li { display: flex; justify-content: space-between; gap: 12px; }
 .tip { background: var(--s2); border-radius: 8px; padding: 8px 12px; }
+.actions { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.action { display: flex; gap: 12px; align-items: flex-start; width: 100%; text-align: left; padding: 8px; border-radius: 8px; transition: background-color 300ms var(--ease), color 300ms var(--ease), transform 300ms var(--ease); }
+.action:hover { background: var(--s2); }
+.action:active { transform: scale(0.98); }
+.action i { font-size: 20px; flex: none; color: var(--muted); transition: color 300ms var(--ease); }
+.action[aria-pressed="true"] { color: var(--muted); }
+.action[aria-pressed="true"] i { color: var(--accent); }
+.fb ul.todo i.open { color: var(--muted); }
 .empty { text-align: center; padding: 32px 16px; align-items: center; }
 .empty i { font-size: 32px; color: var(--muted); }
 .skeleton { background: var(--s3); border-radius: 8px; animation: pulse 800ms var(--ease) infinite alternate; }
@@ -267,6 +275,8 @@ nav.tabs button[aria-current="page"] { background: var(--line); color: var(--tex
       </div>
     </div>
 
+    <div class="card" id="actions" hidden></div>
+
     <form class="card" id="meal-form" novalidate>
       <h2 class="title-3">Log a meal</h2>
       <label class="picker" id="meal-picker">
@@ -388,7 +398,7 @@ function show(view) {
   $('nav.tabs').hidden = !ready || view === 'auth';
   $$('nav.tabs button').forEach(b => b.dataset.tab === view ? b.setAttribute('aria-current', 'page') : b.removeAttribute('aria-current'));
   window.scrollTo(0, 0);
-  if (view === 'today') loadDay();
+  if (view === 'today') { loadDay(); loadActions(); }
   if (view === 'checkin') loadCheckins();
   if (view === 'plan') fillPlan();
   if (view === 'coach') loadChat();
@@ -597,6 +607,56 @@ async function loadDay() {
   }
 }
 
+/* ---------- this week's actions ---------- */
+let week = null;
+
+function renderActions(error) {
+  const box = $('#actions');
+  box.hidden = !week;
+  if (!week) return;
+  if (!week.actions.length) {
+    box.innerHTML = `<h2 class="title-3">This week's actions</h2>
+      <p class="body-6 muted">Send a progress photo and your coach sets three actions for the week. They show up here to tick off.</p>
+      <button class="btn quiet button-sm" type="button" data-go-checkin><i class="ph ph-camera" aria-hidden="true"></i>Go to check in</button>`;
+    return;
+  }
+  const done = week.actions.filter(a => a.done).length, all = week.actions.length;
+  const days = Math.floor((Date.now() - new Date(week.set_at)) / 864e5);
+  const when = new Date(week.set_at).toLocaleDateString(undefined, { day: 'numeric', month: 'long' });
+  box.innerHTML = `<div class="row between"><h2 class="title-3">This week's actions</h2>
+      <span class="caption-2 ${done === all ? 'accent' : 'muted'}">${done === all ? `All ${all} done` : `${done} of ${all} done`}</span></div>
+    <ul class="actions">${week.actions.map(a => `<li><button class="action body-6" type="button" data-action="${a.position}" aria-pressed="${a.done}">
+      <i class="ph ${a.done ? 'ph-check-circle' : 'ph-circle'}" aria-hidden="true"></i><span>${esc(a.text)}</span></button></li>`).join('')}</ul>
+    ${error ? `<p class="error body-6" role="alert">${esc(error)}</p>` : ''}
+    ${days >= 7
+      ? `<p class="caption-5 muted">Set ${days} days ago. A new check in reviews these and sets the next three.</p>
+         <button class="btn quiet button-sm" type="button" data-go-checkin><i class="ph ph-camera" aria-hidden="true"></i>New check in</button>`
+      : `<p class="caption-5 muted">Set at your check in on ${esc(when)}. Your coach follows up on these next time.</p>`}`;
+}
+
+async function loadActions() {
+  try { week = await api('/api/actions'); }
+  catch { week = null; }
+  renderActions();
+}
+
+$('#actions').addEventListener('click', async e => {
+  if (e.target.closest('[data-go-checkin]')) return show('checkin');
+  const btn = e.target.closest('[data-action]');
+  if (!btn || btn.disabled) return;
+  const action = week.actions.find(a => a.position === Number(btn.dataset.action));
+  action.done = !action.done;   // show the tick at once, undo it if saving fails
+  renderActions();
+  try {
+    week = await postJson(`/api/actions/${week.checkin_id}/${action.position}`, { done: action.done }, 'PUT');
+    renderActions();
+  } catch (err) {
+    if (err.status === 401) { me = null; return route(); }
+    action.done = !action.done;
+    renderActions(err.message);
+  }
+});
+
 function armRemove(btn, run) {
   if (btn.dataset.armed) return run();
   btn.dataset.armed = '1';
@@ -758,11 +818,12 @@ function checkinCard(c) {
       <button class="btn text danger button-sm" data-remove>Remove</button></div>
     <img class="shot" src="${esc(c.photo)}" alt="Progress photo from ${esc(when)}" loading="lazy">
     <h3 class="heading-6">${esc(f.headline)}</h3>
+    ${f.follow_up ? `<div class="stack"><h4 class="caption-3">Your actions from last time</h4><p class="body-6">${esc(f.follow_up)}</p></div>` : ''}
     ${list('What I see', f.observations)}
     ${f.progress ? `<div class="stack"><h4 class="caption-3">Since last time</h4><p class="body-6">${esc(f.progress)}</p></div>` : ''}
     ${list('Training', f.training)}
     ${list('Nutrition', f.nutrition)}
-    ${f.this_week && f.this_week.length ? `<div class="stack tip"><h4 class="caption-3">This week</h4><ul class="todo body-6">${f.this_week.map(i => `<li><i class="ph ph-check-circle" aria-hidden="true"></i><span>${esc(i)}</span></li>`).join('')}</ul></div>` : ''}
+    ${c.actions && c.actions.length ? `<div class="stack tip"><h4 class="caption-3">Actions for the week</h4><ul class="todo body-6">${c.actions.map(a => `<li><i class="ph ${a.done ? 'ph-check-circle' : 'ph-circle open'}" role="img" aria-label="${a.done ? 'Done' : 'Not done yet'}"></i><span>${esc(a.text)}</span></li>`).join('')}</ul></div>` : ''}
     ${f.encouragement ? `<p class="body-6 accent">${esc(f.encouragement)}</p>` : ''}
   </article>`;
 }

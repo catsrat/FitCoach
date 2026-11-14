@@ -3,6 +3,7 @@
 Photo based fitness coaching and meal tracking.
 
 - **Check in**: send a progress photo (plus optional weight and a note). The coach compares it with your previous check in and replies with observations, training and nutrition advice, and three actions for the week.
+- **Weekly actions**: the three actions from the latest check in sit on the Today screen as a checklist. The coach chat sees what is ticked, and the next check in follows up on them.
 - **Meals**: snap a meal (or describe it). Calories, protein, carbs, and fat are estimated per item and added to your day against your targets.
 - **Coach**: chat with a coach that knows your plan, your meals, and your check ins. It advises only; it cannot change the account.
 - **Plan**: daily calorie and protein targets from your age, height, weight, goal, and activity (Mifflin St Jeor).
