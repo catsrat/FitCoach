@@ -1060,6 +1060,20 @@ def index():
     return render_template("index.html")
 
 
+@app.get("/manifest.webmanifest")
+def manifest():
+    return send_from_directory(BASE / "static", "manifest.webmanifest",
+                               mimetype="application/manifest+json", max_age=3600)
+
+
+@app.get("/sw.js")
+def service_worker():
+    # Served from the site root so it can cover every page; never cached, so updates reach phones.
+    response = send_from_directory(BASE / "static", "sw.js", mimetype="text/javascript", max_age=0)
+    response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 @app.get("/healthz")
 def healthz():
     db().execute("SELECT 1")

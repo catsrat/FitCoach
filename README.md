@@ -8,6 +8,8 @@ Photo based fitness coaching and meal tracking.
 - **Coach**: chat with a coach that knows your plan, your meals, and your check ins. It advises only; it cannot change the account.
 - **Plan**: daily calorie and protein targets from your age, height, weight, goal, and activity (Mifflin St Jeor).
 
+The site can be added to a phone's home screen and then opens full screen like an app (`static/manifest.webmanifest`, icons in `static/`). `static/sw.js` keeps no copy of the app; it only shows `static/offline.html` when there is no connection.
+
 ## Run
 
 ```bash

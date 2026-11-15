@@ -7,6 +7,12 @@
 <meta name="description" content="Send a progress photo and get coaching you can act on this week. Snap your meals and FitCoach counts the calories.">
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23B8F04A'/%3E%3Cpath d='M9 16h14M6 12v8M26 12v8M10 10v12M22 10v12' stroke='%23131209' stroke-width='2.5' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/static/icon-180.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="FitCoach">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&display=swap" rel="stylesheet">
@@ -16,6 +22,7 @@
   --bg: #000000; --s1: #181818; --s2: #1F1F1F; --s3: #272727; --line: #313131;
   --text: #FFFFFF; --muted: #9B9B9B; --accent: #B8F04A; --accent-ink: #131209; --danger: #FF7A6B;
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --safe: env(safe-area-inset-bottom, 0px);   /* the home indicator strip on phones without a home button */
 }
 * { box-sizing: border-box; margin: 0; }
 html { -webkit-text-size-adjust: 100%; }
@@ -45,7 +52,7 @@ img { display: block; max-width: 100%; }
 .skip { position: absolute; left: 16px; top: 16px; padding: 8px 12px; background: var(--accent); color: var(--accent-ink); border-radius: 8px; transform: translateY(-64px); transition: transform 500ms var(--ease); z-index: 20; }
 .skip:focus { transform: none; }
 
-main { max-width: 560px; margin: 0 auto; padding: 24px 16px 96px; }
+main { max-width: 560px; margin: 0 auto; padding: 24px 16px calc(96px + var(--safe)); }
 .view { display: flex; flex-direction: column; gap: 16px; animation: rise 500ms var(--ease) both; }
 @keyframes rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
 @keyframes pulse { from { opacity: 1; } to { opacity: 0.4; } }
@@ -141,7 +148,7 @@ details summary i { transition: transform 300ms var(--ease); }
 .spark { width: 100%; height: 64px; }
 
 /* nav */
-nav.tabs { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); display: flex; gap: 4px; padding: 4px; background: rgba(24, 24, 24, 0.72); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); border: 1px solid var(--line); border-radius: 9999px; z-index: 10; }
+nav.tabs { position: fixed; left: 50%; bottom: calc(16px + var(--safe)); transform: translateX(-50%); display: flex; gap: 4px; padding: 4px; background: rgba(24, 24, 24, 0.72); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); border: 1px solid var(--line); border-radius: 9999px; z-index: 10; }
 nav.tabs button { display: inline-flex; align-items: center; gap: 8px; padding: 8px 16px; border-radius: 9999px; color: var(--muted); white-space: nowrap; transition: background-color 300ms var(--ease), color 300ms var(--ease), transform 300ms var(--ease); }
 nav.tabs button i { font-size: 20px; }
 nav.tabs button:hover { color: var(--text); }
@@ -154,19 +161,19 @@ nav.tabs button[aria-current="page"] { background: var(--line); color: var(--tex
 }
 
 /* coach chat */
-[data-view="coach"] { min-height: calc(100dvh - 120px); }
+[data-view="coach"] { min-height: calc(100dvh - 120px - var(--safe)); }
 .chat { flex: 1; display: flex; flex-direction: column; gap: 12px; }
 .msg { max-width: 88%; padding: 8px 12px; border-radius: 16px; white-space: pre-wrap; overflow-wrap: anywhere; animation: rise 500ms var(--ease) both; }
 .msg.user { align-self: flex-end; background: var(--s3); }
 .msg.assistant { align-self: flex-start; background: var(--s1); border: 1px solid var(--line); }
 .chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
-.composer { position: sticky; bottom: 64px; display: flex; flex-direction: column; gap: 8px; padding: 8px 0; background: var(--bg); }
+.composer { position: sticky; bottom: calc(64px + var(--safe)); display: flex; flex-direction: column; gap: 8px; padding: 8px 0; background: var(--bg); }
 /* keeps older messages from showing through between the composer and the tab bar */
-.composer::after { content: ""; position: absolute; left: 0; right: 0; top: 100%; height: 96px; background: var(--bg); }
+.composer::after { content: ""; position: absolute; left: 0; right: 0; top: 100%; height: calc(96px + var(--safe)); background: var(--bg); }
 .composer input { border-radius: 9999px; padding: 8px 16px; }
 .composer .icon-btn { flex: none; background: var(--accent); color: var(--accent-ink); border: 0; }
 .composer .icon-btn:hover { background: var(--accent); opacity: 0.88; }
-@media (max-width: 479px) { .composer { bottom: 80px; } }
+@media (max-width: 479px) { .composer { bottom: calc(80px + var(--safe)); } }
 </style>
 </head>
 <body>
@@ -230,6 +237,7 @@ nav.tabs button[aria-current="page"] { background: var(--line); color: var(--tex
       <p class="error body-6" role="alert" hidden></p>
       <button class="btn wide button-md" type="submit">Save plan</button>
     </form>
+    <div class="card" data-install-card="plan" hidden></div>
     <div class="card">
       <h2 class="title-3">Your photos and data</h2>
       <p class="body-6 muted">Your photos, meals, and check ins are stored on the server that runs this app and only you can open them. Each photo is sent to Anthropic's Claude API to produce the estimate or feedback. Messages to your coach are stored too, and are sent to the same API with a summary of your plan, meals, and check ins. Removing a meal or check in deletes its photo, and deleting your account erases everything.</p>
@@ -253,6 +261,8 @@ nav.tabs button[aria-current="page"] { background: var(--line); color: var(--tex
         <button class="icon-btn" id="day-next" aria-label="Next day"><i class="ph ph-caret-right" aria-hidden="true"></i></button>
       </div>
     </header>
+
+    <div class="card" data-install-card="banner" hidden></div>
 
     <div class="card">
       <div class="ring-wrap">
@@ -599,6 +609,7 @@ async function loadDay() {
   try {
     const data = await api(`/api/day?day=${ymd(day)}`);
     renderTotals(data.totals);
+    if (data.meals.length) { hasLoggedMeal = true; renderInstall(); }
     box.innerHTML = data.meals.length ? data.meals.map(mealCard).join('')
       : `<div class="card empty"><i class="ph ph-fork-knife" aria-hidden="true"></i><h3 class="title-3">No meals logged yet</h3><p class="body-6 muted">Take a photo of your plate and the calories and macros are added for you.</p></div>`;
   } catch (err) {
@@ -889,6 +900,45 @@ $('#checkin-form').addEventListener('submit', async e => {
     if (!$('#checkins').children.length) loadCheckins();
   } finally { busy(form, false); }
 });
+
+/* ---------- install on the home screen ---------- */
+const installed = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const remember = {   // storage can be blocked, for example in a private window
+  get(key) { try { return localStorage.getItem(key); } catch { return null; } },
+  set(key, value) { try { localStorage.setItem(key, value); } catch {} },
+};
+let installPrompt = null;   // Android and desktop Chrome hand this over when the app can be installed
+let hasLoggedMeal = false;  // the Today banner waits until the person has logged something
+
+function renderInstall() {
+  const offer = !installed() && (installPrompt || isIos);
+  $$('[data-install-card]').forEach(card => {
+    const banner = card.dataset.installCard === 'banner';
+    card.hidden = !offer || (banner && (!hasLoggedMeal || !!remember.get('install-dismissed')));
+    if (card.hidden) return;
+    card.innerHTML = `<div class="row between"><h2 class="title-3">Add FitCoach to your home screen</h2>
+        ${banner ? `<button class="icon-btn" type="button" data-install-dismiss aria-label="Dismiss"><i class="ph ph-x" aria-hidden="true"></i></button>` : ''}</div>
+      ${installPrompt
+        ? `<p class="body-6 muted">It opens full screen like an app, one tap from your home screen.</p>
+           <button class="btn quiet button-sm" type="button" data-install><i class="ph ph-download-simple" aria-hidden="true"></i>Install</button>`
+        : `<p class="body-6 muted">It opens full screen like an app. Tap the Share button <i class="ph ph-export" role="img" aria-label="Share"></i> in your browser, then choose Add to Home Screen. You log in once more inside the installed app.</p>`}`;
+  });
+}
+
+document.addEventListener('click', async e => {
+  if (e.target.closest('[data-install-dismiss]')) { remember.set('install-dismissed', '1'); return renderInstall(); }
+  if (!e.target.closest('[data-install]') || !installPrompt) return;
+  const prompt = installPrompt;
+  installPrompt = null;   // a prompt can be shown only once
+  prompt.prompt();
+  await prompt.userChoice.catch(() => {});
+  renderInstall();
+});
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installPrompt = e; renderInstall(); });
+window.addEventListener('appinstalled', () => { installPrompt = null; renderInstall(); });
+renderInstall();
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 
 /* ---------- boot ---------- */
 (async () => {
