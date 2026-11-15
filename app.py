@@ -40,6 +40,7 @@ GLOBAL_DAILY_AI_LIMIT = int(os.environ.get("FITCOACH_GLOBAL_DAILY_LIMIT", "400")
 CHAT_MODEL = os.environ.get("FITCOACH_CHAT_MODEL", "claude-sonnet-5-5")
 DAILY_CHAT_LIMIT = int(os.environ.get("FITCOACH_DAILY_CHAT_LIMIT", "30"))
 GLOBAL_DAILY_CHAT_LIMIT = int(os.environ.get("FITCOACH_GLOBAL_CHAT_LIMIT", "600"))
+DEFAULT_STEP_GOAL = 8000  # used until the person sets their own on the Plan tab
 
 
 def _secret_key() -> str:
@@ -137,6 +138,12 @@ CREATE TABLE IF NOT EXISTS action_done (
     user_id INTEGER NOT NULL, done_at TEXT NOT NULL,
     PRIMARY KEY (checkin_id, position)
 );
+-- Steps are typed in by the person; a website cannot read a phone's step counter.
+CREATE TABLE IF NOT EXISTS steps (
+    user_id INTEGER NOT NULL, day TEXT NOT NULL,
+    count INTEGER NOT NULL, updated_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, day)
+);
 """
 
 
@@ -156,6 +163,9 @@ def _close_db(_):
 
 with sqlite3.connect(DB_PATH) as _conn:
     _conn.executescript(SCHEMA)
+    # Columns added after the first release. Databases that already exist get them here.
+    if "step_goal" not in {col[1] for col in _conn.execute("PRAGMA table_info(users)")}:
+        _conn.execute("ALTER TABLE users ADD COLUMN step_goal INTEGER")
 
 
 def now_iso() -> str:
@@ -189,6 +199,7 @@ def user_json(user) -> dict:
         "height_cm": user["height_cm"], "weight_kg": user["weight_kg"],
         "goal": user["goal"], "activity": user["activity"],
         "calorie_target": user["calorie_target"], "protein_target": user["protein_target"],
+        "step_goal": user["step_goal"] or DEFAULT_STEP_GOAL,
         "profile_complete": user["calorie_target"] is not None,
     }
 
@@ -264,7 +275,7 @@ def delete_account():
     photos = [r[0] for r in db().execute(
         "SELECT photo FROM meals WHERE user_id=? AND photo IS NOT NULL"
         " UNION SELECT photo FROM checkins WHERE user_id=?", (uid, uid))]
-    for table in ("meals", "checkins", "ai_calls", "chat_messages", "chat_calls", "action_done"):
+    for table in ("meals", "checkins", "ai_calls", "chat_messages", "chat_calls", "action_done", "steps"):
         db().execute(f"DELETE FROM {table} WHERE user_id=?", (uid,))
     db().execute("DELETE FROM users WHERE id=?", (uid,))
     db().commit()
@@ -318,11 +329,14 @@ def save_profile():
     age = int(_number(body, "age", 18, 90, "age"))
     height = _number(body, "height_cm", 120, 230, "height in cm")
     weight = _number(body, "weight_kg", 30, 300, "weight in kg")
+    step_goal = g.user["step_goal"]   # optional; left as it is when the form does not send one
+    if str(body.get("step_goal") or "").strip():
+        step_goal = int(_number(body, "step_goal", 1000, 50000, "daily step goal"))
     calories, protein = compute_targets(sex, age, height, weight, goal, activity)
     db().execute(
         "UPDATE users SET name=?, sex=?, age=?, height_cm=?, weight_kg=?, goal=?, activity=?,"
-        " calorie_target=?, protein_target=? WHERE id=?",
-        (name, sex, age, height, weight, goal, activity, calories, protein, g.user["id"]),
+        " calorie_target=?, protein_target=?, step_goal=? WHERE id=?",
+        (name, sex, age, height, weight, goal, activity, calories, protein, step_goal, g.user["id"]),
     )
     db().commit()
     return jsonify(user_json(current_user()))
@@ -586,7 +600,39 @@ def get_day():
         "SELECT * FROM meals WHERE user_id=? AND day=? ORDER BY created_at DESC, id DESC",
         (g.user["id"], day),
     ).fetchall()
-    return jsonify(day=day, totals=day_totals(g.user["id"], day), meals=[meal_json(r) for r in rows])
+    return jsonify(day=day, totals=day_totals(g.user["id"], day), meals=[meal_json(r) for r in rows],
+                   steps=steps_json(g.user, day))
+
+
+def steps_json(user, day: str) -> dict:
+    row = db().execute("SELECT count FROM steps WHERE user_id=? AND day=?", (user["id"], day)).fetchone()
+    return {"count": row["count"] if row else None, "goal": user["step_goal"] or DEFAULT_STEP_GOAL}
+
+
+@app.put("/api/steps")
+@login_required
+def save_steps():
+    """Set the step count for a day. The person types it in from their phone or watch."""
+    body = request.get_json(silent=True) or {}
+    day = valid_day(body.get("day") or date.today().isoformat())
+    count = int(_number(body, "count", 0, 100000, "step count"))
+    db().execute("INSERT OR REPLACE INTO steps VALUES (?,?,?,?)", (g.user["id"], day, count, now_iso()))
+    db().commit()
+    return jsonify(steps=steps_json(g.user, day))
+
+
+def recent_steps_text(user) -> str:
+    since = (date.today() - timedelta(days=6)).isoformat()
+    rows = db().execute(
+        "SELECT day, count FROM steps WHERE user_id=? AND day>=? ORDER BY day", (user["id"], since)
+    ).fetchall()
+    goal = user["step_goal"] or DEFAULT_STEP_GOAL
+    if not rows:
+        return f"No steps logged in the last 7 days. Their daily step goal is {goal}."
+    days = "; ".join(f"{r['day']}: {r['count']}" for r in rows)
+    avg = sum(r["count"] for r in rows) / len(rows)
+    return (f"Steps logged on {len(rows)} of the last 7 days ({days}). Average on logged days: {avg:.0f}. "
+            f"Their daily step goal is {goal}. They type steps in themselves, so missing days mean not logged.")
 
 
 @app.post("/api/meals")
@@ -703,7 +749,7 @@ def delete_meal(meal_id):
 
 # ---------------------------------------------------------------- check ins
 
-COACH_SYSTEM = """You are the coach in FitCoach, an app where adults track a fitness journey. At each check in the person sends a progress photo, sometimes with their weight and a note. You reply with feedback they can act on this week. You also receive their profile, their calorie and protein targets, a summary of what they logged eating recently, and their earlier check ins, including the previous photo when there is one.
+COACH_SYSTEM = """You are the coach in FitCoach, an app where adults track a fitness journey. At each check in the person sends a progress photo, sometimes with their weight and a note. You reply with feedback they can act on this week. You also receive their profile, their calorie and protein targets, a summary of what they logged eating recently, the daily steps they typed in, and their earlier check ins, including the previous photo when there is one.
 
 What good feedback looks like:
 Ground it in what you can actually see (posture, overall build, which areas show more or less muscle development relative to the rest, visible change against the previous photo) and in their numbers (goal, targets, logged intake, weight trend). Be specific enough to follow without asking a question: name exercises, sets and rep ranges, sessions per week, step counts, protein amounts, and meal ideas rather than general advice. Match the plan to their goal and stated activity level; someone new to training needs a simpler plan than someone training six days a week.
@@ -719,7 +765,7 @@ Following up:
 When there was an earlier check in, you also get the three actions set then, each marked with whether the person ticked it off in the app. A coach who never asks about last week's plan is not coaching, so follow up on them in follow_up: acknowledge what they ticked, and for anything unticked, say what would make it easier this week or fold it into the new actions. A tick is the person's own report, and an unticked action may be done but not recorded, so ask rather than scold. Let this shape this_week too: build on what worked, and make an action smaller or different if it was missed, rather than repeating it unchanged.
 
 Fields:
-headline is one sentence that sums up where they are right now. follow_up is one to three sentences on the actions from the previous check in as described above; leave it empty on a first check in. observations are 2 to 4 things you see in the photo. progress compares against the previous check in in a sentence or two; on a first check in, say this photo is the baseline. training and nutrition are 2 to 4 concrete recommendations each. this_week is exactly 3 actions small enough to complete in the next seven days. encouragement is one genuine closing sentence tied to something specific about them. Write in plain everyday language and address them directly."""
+headline is one sentence that sums up where they are right now. follow_up is one to three sentences on the actions from the previous check in as described above; leave it empty on a first check in. observations are 2 to 4 things you see in the photo. progress compares against the previous check in in a sentence or two; on a first check in, say this photo is the baseline. training and nutrition are 2 to 4 concrete recommendations each. this_week is exactly 3 actions small enough to complete in the next seven days. The app shows each action later on its own, as a checklist item away from this feedback, so write each one to make sense alone: spell out what to do ("Do 3 full body sessions: squats, push ups, rows, 3 sets of 10") instead of pointing to "the plan above". encouragement is one genuine closing sentence tied to something specific about them. Write in plain everyday language and address them directly."""
 
 _STRINGS = {"type": "array", "items": {"type": "string"}}
 COACH_SCHEMA = {
@@ -871,6 +917,7 @@ def add_checkin():
         f"Weight reported at this check in: {f'{weight:g} kg' if weight else 'not given'}.\n"
         f"Their note: {note or '(none)'}\n"
         f"Recent eating: {recent_intake_text(user['id'])}\n"
+        f"Recent steps: {recent_steps_text(user)}\n"
         f"{history}"
     )})
     feedback = ask_claude(COACH_SYSTEM, content, COACH_SCHEMA, effort="medium")
@@ -913,13 +960,15 @@ Answer the question they asked, using their numbers. "You have about 620 kcal an
 
 The snapshot lists this week's actions, the three set at their latest check in, and which ones they have ticked off. Bring them in when they are relevant to what the person is asking: credit what is done and help make the open ones doable. An unticked action may simply not be recorded, so ask rather than assume, and do not nag about them in every reply.
 
+Steps in the snapshot are numbers the person typed in on the Today tab from their phone or watch; the app cannot read a step counter, so a day without steps means not logged, not zero.
+
 Be honest about the data. Calories in the app are estimates from photos and can be off, and a day with little logged usually means meals were not logged, not that the person ate little. Do not treat a partly logged day as a real total.
 
 How to write:
 This is a chat on a phone. Write the way a good coach texts: warm, direct, and short, usually under 120 words, longer only when they ask for a plan. Use plain text. The app shows your reply exactly as written, so do not use markdown such as asterisks, pound signs, or tables. For a short list, put each item on its own line starting with a dash.
 
 What you can and cannot do:
-You can only talk. You cannot log meals, change targets, or edit the account. When that is what they need, tell them where: meals are logged and corrected on the Today tab (each meal has a Fix button), this week's actions are ticked off on the Today tab, progress photos go on the Check in tab, and profile, goal, and targets are on the Plan tab. You cannot see their photos here, only the notes from earlier feedback.
+You can only talk. You cannot log meals, change targets, or edit the account. When that is what they need, tell them where: meals are logged and corrected on the Today tab (each meal has a Fix button), this week's actions are ticked off on the Today tab, steps are typed in on the Today tab and the step goal is set on the Plan tab, progress photos go on the Check in tab, and profile, goal, and targets are on the Plan tab. You cannot see their photos here, only the notes from earlier feedback.
 
 Limits:
 You are a fitness and nutrition coach, not a clinician. For symptoms, injuries that are not improving, medical conditions, medication, pregnancy, or anything that sounds like disordered eating, say plainly that it is outside what you can judge and that a doctor or registered dietitian should look at it, then help with what you safely can. Do not recommend eating below the daily target the app has set, extended fasting, purging, or dosing of steroids or other drugs, even when asked; explain briefly and offer the safer route to the same goal. Never moralise about food or bodies. If they ask about something unrelated to their training, eating, recovery, or this app, say in a sentence that you are here for their fitness and bring it back."""
@@ -936,6 +985,7 @@ def account_snapshot(user, day: str) -> str:
     meal_lines = "\n".join(f"- {m['name']}: {m['calories']} kcal, {m['protein_g']:g} g protein" for m in meals)
     left_kcal = user["calorie_target"] - totals["calories"]
     left_protein = max(0, round(user["protein_target"] - totals["protein_g"]))
+    steps_today = steps_json(user, day)["count"]
     checkins = db().execute(
         "SELECT * FROM checkins WHERE user_id=? ORDER BY created_at DESC, id DESC LIMIT 5", (uid,)
     ).fetchall()
@@ -954,6 +1004,7 @@ def account_snapshot(user, day: str) -> str:
          else f"Today is {-left_kcal} kcal over the calorie target, with {left_protein} g protein still to go."),
         "Meals logged today:\n" + meal_lines if meals else "No meals logged today yet.",
         f"Last 7 days: {recent_intake_text(uid)}",
+        f"Steps today: {steps_today if steps_today is not None else 'not logged yet'}. {recent_steps_text(user)}",
         ("Check ins, newest first:\n" + "\n".join(checkin_lines)) if checkin_lines else "No check ins yet.",
         (f"This week's actions, set at the {checkins[0]['created_at'][:10]} check in, with what they have "
          f"ticked off on the Today tab:\n{actions_text(checkins[0])}") if checkins and actions_text(checkins[0])

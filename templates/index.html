@@ -148,20 +148,20 @@ details summary i { transition: transform 300ms var(--ease); }
 .spark { width: 100%; height: 64px; }
 
 /* nav */
-nav.tabs { position: fixed; left: 50%; bottom: calc(16px + var(--safe)); transform: translateX(-50%); display: flex; gap: 4px; padding: 4px; background: rgba(24, 24, 24, 0.72); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); border: 1px solid var(--line); border-radius: 9999px; z-index: 10; }
+nav.tabs { position: fixed; left: 50%; bottom: calc(16px + var(--safe)); transform: translateX(-50%); display: flex; gap: 4px; padding: 4px; background: rgba(31, 31, 31, 0.8); -webkit-backdrop-filter: blur(24px) saturate(180%); backdrop-filter: blur(24px) saturate(180%); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 9999px; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.48); z-index: 10; }
 nav.tabs button { display: inline-flex; align-items: center; gap: 8px; padding: 8px 16px; border-radius: 9999px; color: var(--muted); white-space: nowrap; transition: background-color 300ms var(--ease), color 300ms var(--ease), transform 300ms var(--ease); }
 nav.tabs button i { font-size: 20px; }
 nav.tabs button:hover { color: var(--text); }
 nav.tabs button:active { transform: scale(0.98); }
-nav.tabs button[aria-current="page"] { background: var(--line); color: var(--text); }
+nav.tabs button[aria-current="page"] { background: rgba(255, 255, 255, 0.08); color: var(--accent); }
 @media (max-width: 479px) {
-  /* four tabs do not fit side by side with inline labels on a phone, so stack icon over label */
-  /* and dock the bar to the bottom edge like a native tab bar: a floating pill left page
-     content showing around and under it, and sat high above the home indicator */
-  :root { --tabbar: calc(54px + max(8px, var(--safe))); }
+  /* Four tabs do not fit side by side with inline labels on a phone, so stack icon over label.
+     The capsule floats just above the home indicator: low enough that almost no page shows
+     beneath it, and blurred enough that what scrolls behind it is not readable. */
+  :root { --tabbar: calc(56px + max(12px, calc(var(--safe) - 12px))); }   /* capsule height plus its gap to the bottom edge */
   main { padding-bottom: calc(var(--tabbar) + 24px); }
-  nav.tabs { left: 0; right: 0; bottom: 0; transform: none; justify-content: space-around; padding: 8px 8px max(8px, var(--safe)); background: rgba(0, 0, 0, 0.92); border: 0; border-radius: 0; box-shadow: 0 -1px 0 var(--line); }
-  nav.tabs button { flex: 1; max-width: 96px; flex-direction: column; justify-content: center; gap: 2px; padding: 4px 8px; border-radius: 12px; font-size: 12px; line-height: 16px; }
+  nav.tabs { bottom: max(12px, calc(var(--safe) - 12px)); gap: 0; }
+  nav.tabs button { flex-direction: column; gap: 2px; padding: 4px 16px; min-width: 72px; font-size: 12px; line-height: 16px; }
   [data-view="coach"] { min-height: calc(100dvh - 48px - var(--tabbar)); }
 }
 
@@ -178,7 +178,7 @@ nav.tabs button[aria-current="page"] { background: var(--line); color: var(--tex
 .composer input { border-radius: 9999px; padding: 8px 16px; }
 .composer .icon-btn { flex: none; background: var(--accent); color: var(--accent-ink); border: 0; }
 .composer .icon-btn:hover { background: var(--accent); opacity: 0.88; }
-@media (max-width: 479px) { .composer { bottom: calc(var(--tabbar) + 16px); } }
+@media (max-width: 479px) { .composer { bottom: calc(var(--tabbar) + 8px); } }
 </style>
 </head>
 <body>
@@ -238,6 +238,8 @@ nav.tabs button[aria-current="page"] { background: var(--line); color: var(--tex
           <option value="moderate">Moderate exercise, 3 to 5 days a week</option>
           <option value="very">Hard exercise, 6 to 7 days a week</option>
         </select></label>
+      <label class="field"><span class="title-4">Daily step goal</span>
+        <input name="step_goal" type="number" inputmode="numeric" min="1000" max="50000" step="500" placeholder="8000"></label>
       <p class="caption-5 muted">FitCoach is for adults aged 18 and over.</p>
       <p class="error body-6" role="alert" hidden></p>
       <button class="btn wide button-md" type="submit">Save plan</button>
@@ -287,6 +289,18 @@ nav.tabs button[aria-current="page"] { background: var(--line); color: var(--tex
       <div class="grid2">
         <div><p class="caption-2 muted">Carbs</p><p class="title-3" id="m-carbs"></p></div>
         <div><p class="caption-2 muted">Fat</p><p class="title-3" id="m-fat"></p></div>
+      </div>
+      <div class="macro">
+        <div class="row between"><span class="title-4">Steps</span>
+          <span class="row"><span class="caption-2 muted" id="m-steps"></span>
+            <button class="btn quiet button-sm" type="button" id="steps-edit" aria-expanded="false" aria-controls="steps-form">Add</button></span></div>
+        <div class="bar"><span id="bar-steps"></span></div>
+        <form class="stack" id="steps-form" hidden novalidate>
+          <label class="field"><span class="caption-2 muted">Type the number from your phone's health app or your watch.</span>
+            <input name="count" type="number" inputmode="numeric" min="0" max="100000" step="1" placeholder="6500"></label>
+          <p class="error body-6" role="alert" hidden></p>
+          <button class="btn quiet wide button-sm" type="submit"><span>Save steps</span></button>
+        </form>
       </div>
     </div>
 
@@ -486,7 +500,7 @@ function fillPlan() {
   if (done) {
     $('#t-cal').textContent = `${num(me.calorie_target)} kcal`;
     $('#t-pro').textContent = `${num(me.protein_target)} g`;
-    for (const k of ['name', 'age', 'sex', 'height_cm', 'weight_kg', 'goal', 'activity']) form[k].value = me[k];
+    for (const k of ['name', 'age', 'sex', 'height_cm', 'weight_kg', 'goal', 'activity', 'step_goal']) form[k].value = me[k];
   }
   setError(form, '');
 }
@@ -576,6 +590,41 @@ function renderTotals(t) {
   $('#m-fat').textContent = g1(t.fat_g);
 }
 
+/* ---------- steps ---------- */
+function renderSteps(s) {
+  const logged = s.count !== null;
+  $('#m-steps').textContent = logged ? `${num(s.count)} of ${num(s.goal)}` : `Goal ${num(s.goal)}`;
+  $('#bar-steps').style.transform = `scaleX(${logged ? Math.min(1, s.count / s.goal) : 0})`;
+  $('#steps-edit').textContent = logged ? 'Edit' : 'Add';
+  $('#steps-form').count.value = logged ? s.count : '';
+}
+
+function toggleSteps(open) {
+  const form = $('#steps-form');
+  form.hidden = !open;
+  $('#steps-edit').setAttribute('aria-expanded', String(open));
+  setError(form, '');
+  if (open) form.count.focus();
+}
+
+$('#steps-edit').addEventListener('click', () => toggleSteps($('#steps-form').hidden));
+
+$('#steps-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const form = e.target, count = form.count.value.trim();
+  if (count === '' || !(Number(count) >= 0)) return setError(form, 'Enter your steps as a number.');
+  setError(form, '');
+  busy(form, true, 'Saving');
+  try {
+    const data = await postJson('/api/steps', { day: ymd(day), count: Number(count) }, 'PUT');
+    renderSteps(data.steps);
+    toggleSteps(false);
+  } catch (err) {
+    if (err.status === 401) { me = null; return route(); }
+    setError(form, err.message);
+  } finally { busy(form, false); }
+});
+
 const skeletonCard = () => `<div class="card" data-skeleton>
   <div class="row"><div class="skeleton" style="width:64px;height:64px"></div>
   <div class="stack grow"><div class="skeleton" style="height:24px;width:64%"></div><div class="skeleton" style="height:16px;width:40%"></div></div></div>
@@ -614,6 +663,8 @@ async function loadDay() {
   try {
     const data = await api(`/api/day?day=${ymd(day)}`);
     renderTotals(data.totals);
+    renderSteps(data.steps);
+    toggleSteps(false);
     if (data.meals.length) { hasLoggedMeal = true; renderInstall(); }
     box.innerHTML = data.meals.length ? data.meals.map(mealCard).join('')
       : `<div class="card empty"><i class="ph ph-fork-knife" aria-hidden="true"></i><h3 class="title-3">No meals logged yet</h3><p class="body-6 muted">Take a photo of your plate and the calories and macros are added for you.</p></div>`;
