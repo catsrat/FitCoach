@@ -156,8 +156,13 @@ nav.tabs button:active { transform: scale(0.98); }
 nav.tabs button[aria-current="page"] { background: var(--line); color: var(--text); }
 @media (max-width: 479px) {
   /* four tabs do not fit side by side with inline labels on a phone, so stack icon over label */
-  nav.tabs { border-radius: 24px; }
-  nav.tabs button { flex-direction: column; gap: 2px; padding: 8px 12px; min-width: 64px; border-radius: 20px; font-size: 12px; line-height: 16px; }
+  /* and dock the bar to the bottom edge like a native tab bar: a floating pill left page
+     content showing around and under it, and sat high above the home indicator */
+  :root { --tabbar: calc(54px + max(8px, var(--safe))); }
+  main { padding-bottom: calc(var(--tabbar) + 24px); }
+  nav.tabs { left: 0; right: 0; bottom: 0; transform: none; justify-content: space-around; padding: 8px 8px max(8px, var(--safe)); background: rgba(0, 0, 0, 0.92); border: 0; border-radius: 0; box-shadow: 0 -1px 0 var(--line); }
+  nav.tabs button { flex: 1; max-width: 96px; flex-direction: column; justify-content: center; gap: 2px; padding: 4px 8px; border-radius: 12px; font-size: 12px; line-height: 16px; }
+  [data-view="coach"] { min-height: calc(100dvh - 48px - var(--tabbar)); }
 }
 
 /* coach chat */
@@ -167,13 +172,13 @@ nav.tabs button[aria-current="page"] { background: var(--line); color: var(--tex
 .msg.user { align-self: flex-end; background: var(--s3); }
 .msg.assistant { align-self: flex-start; background: var(--s1); border: 1px solid var(--line); }
 .chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
-.composer { position: sticky; bottom: calc(64px + var(--safe)); display: flex; flex-direction: column; gap: 8px; padding: 8px 0; background: var(--bg); }
+.composer { position: sticky; z-index: 1; bottom: calc(64px + var(--safe)); display: flex; flex-direction: column; gap: 8px; padding: 8px 0; background: var(--bg); }
 /* keeps older messages from showing through between the composer and the tab bar */
 .composer::after { content: ""; position: absolute; left: 0; right: 0; top: 100%; height: calc(96px + var(--safe)); background: var(--bg); }
 .composer input { border-radius: 9999px; padding: 8px 16px; }
 .composer .icon-btn { flex: none; background: var(--accent); color: var(--accent-ink); border: 0; }
 .composer .icon-btn:hover { background: var(--accent); opacity: 0.88; }
-@media (max-width: 479px) { .composer { bottom: calc(80px + var(--safe)); } }
+@media (max-width: 479px) { .composer { bottom: calc(var(--tabbar) + 16px); } }
 </style>
 </head>
 <body>
