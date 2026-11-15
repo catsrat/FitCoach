@@ -134,6 +134,10 @@ details summary i { transition: transform 300ms var(--ease); }
 .action[aria-pressed="true"] { color: var(--muted); }
 .action[aria-pressed="true"] i { color: var(--accent); }
 .fb ul.todo i.open { color: var(--muted); }
+.howto { padding-left: 16px; display: flex; flex-direction: column; gap: 8px; }
+.howto ul { padding-left: 16px; margin-top: 4px; display: flex; flex-direction: column; gap: 4px; }
+.howto b { font-weight: 600; }
+.howto code { font-family: inherit; background: var(--s3); border-radius: 4px; padding: 0 4px; }
 .empty { text-align: center; padding: 32px 16px; align-items: center; }
 .empty i { font-size: 32px; color: var(--muted); }
 .skeleton { background: var(--s3); border-radius: 8px; animation: pulse 800ms var(--ease) infinite alternate; }
@@ -244,6 +248,7 @@ nav.tabs button[aria-current="page"] { background: rgba(255, 255, 255, 0.08); co
       <p class="error body-6" role="alert" hidden></p>
       <button class="btn wide button-md" type="submit">Save plan</button>
     </form>
+    <div class="card" id="sync-card" hidden></div>
     <div class="card" data-install-card="plan" hidden></div>
     <div class="card">
       <h2 class="title-3">Your photos and data</h2>
@@ -429,13 +434,13 @@ function show(view) {
   window.scrollTo(0, 0);
   if (view === 'today') { loadDay(); loadActions(); }
   if (view === 'checkin') loadCheckins();
-  if (view === 'plan') fillPlan();
+  if (view === 'plan') { fillPlan(); loadSync(); }
   if (view === 'coach') loadChat();
 }
 $$('nav.tabs button').forEach(b => b.addEventListener('click', () => show(b.dataset.tab)));
 
 function route() {
-  if (!me) return show('auth');
+  if (!me) { syncSecret = null; return show('auth'); }
   show(me.profile_complete ? 'today' : 'plan');
 }
 
@@ -623,6 +628,77 @@ $('#steps-form').addEventListener('submit', async e => {
     if (err.status === 401) { me = null; return route(); }
     setError(form, err.message);
   } finally { busy(form, false); }
+});
+
+/* ---------- automatic steps through an iPhone shortcut ---------- */
+let sync = null;         // { enabled, created_at, last_used_at }
+let syncSecret = null;   // { url, token }: the server hands the key over only when it is created
+
+function renderSync(error) {
+  const box = $('#sync-card');
+  box.hidden = !sync || !me || !me.profile_complete;
+  if (box.hidden) return;
+  const field = (label, key) => `<label class="field"><span class="caption-2 muted">${label}</span>
+    <span class="row"><input readonly value="${esc(syncSecret[key])}" data-field="${key}">
+      <button class="btn quiet button-sm" type="button" data-copy="${key}">Copy</button></span></label>`;
+  const last = sync.last_used_at
+    ? `Last synced ${new Date(sync.last_used_at).toLocaleString(undefined, { day: 'numeric', month: 'long', hour: 'numeric', minute: '2-digit' })}.`
+    : 'Waiting for the first sync from your shortcut.';
+  box.innerHTML = `<h2 class="title-3">Automatic steps from your iPhone</h2>
+    <p class="body-6 muted">FitCoach cannot read your phone's step counter by itself. The Shortcuts app on an iPhone can, and it can send the number here every evening.</p>
+    ${error ? `<p class="error body-6" role="alert">${esc(error)}</p>` : ''}
+    ${!sync.enabled ? `<button class="btn quiet button-sm" type="button" data-sync-create><i class="ph ph-footprints" aria-hidden="true"></i>Set up automatic steps</button>`
+    : !syncSecret ? `<p class="body-6">${esc(last)}</p>
+      <p class="caption-5 muted">A new key replaces the old one, so the shortcut needs the new key pasted in.</p>
+      <div class="row between"><button class="btn quiet button-sm" type="button" data-sync-create>New key</button>
+        <button class="btn text danger button-sm" type="button" data-sync-off>Turn off</button></div>`
+    : `${field('Address', 'url')}${field('Your key. It is shown only this once, so finish the setup now.', 'token')}
+      <ol class="howto body-6">
+        <li>Open the Shortcuts app, tap the plus, and name the new shortcut FitCoach steps.</li>
+        <li>Add the action <b>Find Health Samples</b>. Set Type to Steps and add the filter Start Date is today.</li>
+        <li>Add the action <b>Calculate Statistics</b> and choose Sum.</li>
+        <li>Add the action <b>Get Contents of URL</b> and paste the address. Open its options, set Method to POST and Request Body to JSON, then add three fields:
+          <ul><li><code>token</code> as Text: paste your key</li>
+            <li><code>steps</code> as Number: choose the Statistics Result variable</li>
+            <li><code>day</code> as Text: choose Current Date, tap it, and set a custom format of <code>yyyy-MM-dd</code></li></ul></li>
+        <li>Run it once with the play button and allow the Health and website prompts. Your steps should then show on the Today screen.</li>
+        <li>To run it every day, open the Automation tab and add a Time of Day automation for an evening hour when you are usually on your phone. Set it to run immediately and have it run this shortcut.</li>
+      </ol>
+      <p class="caption-5 muted">Health data is sealed while the iPhone is locked, so the automation only works if the phone is in use at that time. Menu names can differ a little between iOS versions.</p>
+      <button class="btn quiet button-sm" type="button" data-sync-done>Done</button>`}`;
+}
+
+async function loadSync() {
+  try { sync = await api('/api/steps/sync-key'); } catch { sync = null; }
+  renderSync();
+}
+
+$('#sync-card').addEventListener('click', async e => {
+  const copy = e.target.closest('[data-copy]');
+  if (copy) {
+    try { await navigator.clipboard.writeText(syncSecret[copy.dataset.copy]); copy.textContent = 'Copied'; }
+    catch { $(`#sync-card [data-field="${copy.dataset.copy}"]`).select(); copy.textContent = 'Select and copy'; }
+    return;
+  }
+  if (e.target.closest('[data-sync-done]')) { syncSecret = null; return loadSync(); }
+  const create = e.target.closest('[data-sync-create]'), off = e.target.closest('[data-sync-off]');
+  if (!create && !off) return;
+  if (off && !off.dataset.armed) {   // two taps, like the other destructive actions
+    off.dataset.armed = '1';
+    off.textContent = 'Tap again to turn off';
+    setTimeout(() => { delete off.dataset.armed; off.textContent = 'Turn off'; }, 3000);
+    return;
+  }
+  (create || off).disabled = true;
+  try {
+    const data = await api('/api/steps/sync-key', { method: create ? 'POST' : 'DELETE' });
+    syncSecret = create ? { url: data.url, token: data.token } : null;
+    sync = { enabled: data.enabled, created_at: data.created_at, last_used_at: data.last_used_at };
+    renderSync();
+  } catch (err) {
+    if (err.status === 401) { me = null; return route(); }
+    renderSync(err.message);
+  }
 });
 
 const skeletonCard = () => `<div class="card" data-skeleton>

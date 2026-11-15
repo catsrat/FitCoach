@@ -4,6 +4,7 @@ Run:  .venv\\Scripts\\python app.py   then open http://127.0.0.1:5055
 Needs ANTHROPIC_API_KEY in .env (see .env.example).
 """
 import base64
+import hashlib
 import json
 import os
 import re
@@ -144,6 +145,12 @@ CREATE TABLE IF NOT EXISTS steps (
     count INTEGER NOT NULL, updated_at TEXT NOT NULL,
     PRIMARY KEY (user_id, day)
 );
+-- A personal key that lets a phone shortcut send step counts without a login.
+-- Only its hash is stored; the key itself is shown once when it is created.
+CREATE TABLE IF NOT EXISTS steps_sync (
+    user_id INTEGER PRIMARY KEY, token_hash TEXT UNIQUE NOT NULL,
+    created_at TEXT NOT NULL, last_used_at TEXT
+);
 """
 
 
@@ -275,7 +282,7 @@ def delete_account():
     photos = [r[0] for r in db().execute(
         "SELECT photo FROM meals WHERE user_id=? AND photo IS NOT NULL"
         " UNION SELECT photo FROM checkins WHERE user_id=?", (uid, uid))]
-    for table in ("meals", "checkins", "ai_calls", "chat_messages", "chat_calls", "action_done", "steps"):
+    for table in ("meals", "checkins", "ai_calls", "chat_messages", "chat_calls", "action_done", "steps", "steps_sync"):
         db().execute(f"DELETE FROM {table} WHERE user_id=?", (uid,))
     db().execute("DELETE FROM users WHERE id=?", (uid,))
     db().commit()
@@ -621,6 +628,69 @@ def save_steps():
     return jsonify(steps=steps_json(g.user, day))
 
 
+def _token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def sync_json(user_id: int) -> dict:
+    row = db().execute("SELECT * FROM steps_sync WHERE user_id=?", (user_id,)).fetchone()
+    return {"enabled": row is not None,
+            "created_at": row["created_at"] if row else None,
+            "last_used_at": row["last_used_at"] if row else None}
+
+
+@app.get("/api/steps/sync-key")
+@login_required
+def get_sync_key():
+    return jsonify(**sync_json(g.user["id"]))
+
+
+@app.post("/api/steps/sync-key")
+@login_required
+def create_sync_key():
+    """Make a new key for the phone shortcut. Any earlier key stops working."""
+    token = "fc_" + secrets.token_urlsafe(24)
+    db().execute("INSERT OR REPLACE INTO steps_sync VALUES (?,?,?,NULL)",
+                 (g.user["id"], _token_hash(token), now_iso()))
+    db().commit()
+    return jsonify(**sync_json(g.user["id"]), token=token,
+                   url=request.host_url.rstrip("/") + "/api/steps/sync")
+
+
+@app.delete("/api/steps/sync-key")
+@login_required
+def delete_sync_key():
+    db().execute("DELETE FROM steps_sync WHERE user_id=?", (g.user["id"],))
+    db().commit()
+    return jsonify(**sync_json(g.user["id"]))
+
+
+@app.post("/api/steps/sync")
+def sync_steps():
+    """Called by the phone shortcut, not the browser: the key in the body stands in for a login."""
+    throttle("steps-sync", 30)
+    body = request.get_json(silent=True) or request.form
+    row = db().execute("SELECT user_id FROM steps_sync WHERE token_hash=?",
+                       (_token_hash(str(body.get("token") or "")),)).fetchone()
+    if row is None:
+        raise ApiError("That sync key is not valid. Create a new one on the Plan tab in FitCoach.", 401)
+    try:
+        count = int(round(float(body.get("steps"))))
+    except (TypeError, ValueError, OverflowError):
+        raise ApiError("Send the step count as a number in a field called steps.")
+    if not 0 <= count <= 100000:
+        raise ApiError("The step count must be between 0 and 100000.")
+    # The shortcut sends the phone's own date, since the server's day can differ from the person's.
+    try:
+        day = date.fromisoformat(str(body.get("day") or "")[:10]).isoformat()
+    except ValueError:
+        day = date.today().isoformat()
+    db().execute("INSERT OR REPLACE INTO steps VALUES (?,?,?,?)", (row["user_id"], day, count, now_iso()))
+    db().execute("UPDATE steps_sync SET last_used_at=? WHERE user_id=?", (now_iso(), row["user_id"]))
+    db().commit()
+    return jsonify(ok=True, day=day, steps=count, message=f"FitCoach saved {count:,} steps for {day}.")
+
+
 def recent_steps_text(user) -> str:
     since = (date.today() - timedelta(days=6)).isoformat()
     rows = db().execute(
@@ -632,7 +702,7 @@ def recent_steps_text(user) -> str:
     days = "; ".join(f"{r['day']}: {r['count']}" for r in rows)
     avg = sum(r["count"] for r in rows) / len(rows)
     return (f"Steps logged on {len(rows)} of the last 7 days ({days}). Average on logged days: {avg:.0f}. "
-            f"Their daily step goal is {goal}. They type steps in themselves, so missing days mean not logged.")
+            f"Their daily step goal is {goal}. Steps are typed in or sent by a phone shortcut, so missing days mean not logged.")
 
 
 @app.post("/api/meals")
@@ -960,7 +1030,7 @@ Answer the question they asked, using their numbers. "You have about 620 kcal an
 
 The snapshot lists this week's actions, the three set at their latest check in, and which ones they have ticked off. Bring them in when they are relevant to what the person is asking: credit what is done and help make the open ones doable. An unticked action may simply not be recorded, so ask rather than assume, and do not nag about them in every reply.
 
-Steps in the snapshot are numbers the person typed in on the Today tab from their phone or watch; the app cannot read a step counter, so a day without steps means not logged, not zero.
+Steps in the snapshot are numbers the person typed in on the Today tab, or that an iPhone shortcut they set up from the Plan tab sent in; the app cannot read a step counter by itself, so a day without steps means not logged, not zero.
 
 Be honest about the data. Calories in the app are estimates from photos and can be off, and a day with little logged usually means meals were not logged, not that the person ate little. Do not treat a partly logged day as a real total.
 

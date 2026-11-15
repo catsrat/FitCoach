@@ -4,7 +4,7 @@ Photo based fitness coaching and meal tracking.
 
 - **Check in**: send a progress photo (plus optional weight and a note). The coach compares it with your previous check in and replies with observations, training and nutrition advice, and three actions for the week.
 - **Weekly actions**: the three actions from the latest check in sit on the Today screen as a checklist. The coach chat sees what is ticked, and the next check in follows up on them.
-- **Steps**: type in the day's steps on the Today screen against a daily goal set on the Plan tab (8,000 by default). A website cannot read a phone's step counter, so this is manual. The coach sees the last week of steps.
+- **Steps**: type in the day's steps on the Today screen against a daily goal set on the Plan tab (8,000 by default). A website cannot read a phone's step counter, so this is manual by default. On an iPhone it can be automatic: the Plan tab creates a personal key and shows how to build a Shortcut that reads steps from Health and posts them to `/api/steps/sync` each evening. The coach sees the last week of steps.
 - **Meals**: snap a meal (or describe it). Calories, protein, carbs, and fat are estimated per item and added to your day against your targets.
 - **Coach**: chat with a coach that knows your plan, your meals, and your check ins. It advises only; it cannot change the account.
 - **Plan**: daily calorie and protein targets from your age, height, weight, goal, and activity (Mifflin St Jeor).
